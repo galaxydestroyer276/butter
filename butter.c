@@ -192,6 +192,11 @@ static bool handle_keybinding(struct butter_server *server, xkb_keysym_t sym) {
             wl_container_of(server->toplevels.prev, next_toplevel, link);
         focus_toplevel(next_toplevel);
         break;
+    case XKB_KEY_Return:
+        if (fork() == 0) {
+            execl("/usr/bin/foot", "foot", (void *)NULL);
+        }
+        break;
     default:
         return false;
     }
