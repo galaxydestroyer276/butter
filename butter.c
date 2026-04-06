@@ -183,7 +183,7 @@ static bool handle_keybinding(struct butter_server *server, xkb_keysym_t sym) {
     case XKB_KEY_Escape:
         wl_display_terminate(server->wl_display);
         break;
-    case XKB_KEY_F1:
+    case XKB_KEY_Tab:
         /* Cycle to the next toplevel */
         if (wl_list_length(&server->toplevels) < 2) {
             break;
