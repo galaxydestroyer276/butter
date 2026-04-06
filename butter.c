@@ -60,10 +60,6 @@ struct butter_server {
     struct wl_listener request_set_selection;
     struct wl_list keyboards;
     enum butter_cursor_mode cursor_mode;
-    struct butter_toplevel *grabbed_toplevel;
-    double grab_x, grab_y;
-    struct wlr_box grab_geobox;
-    uint32_t resize_edges;
 
     struct wlr_output_layout *output_layout;
     struct wl_list outputs;
@@ -390,82 +386,8 @@ static struct butter_toplevel *desktop_toplevel_at(
     return tree->node.data;
 }
 
-static void reset_cursor_mode(struct butter_server *server) {
-    /* Reset the cursor mode to passthrough. */
-    server->cursor_mode = BUTTER_CURSOR_PASSTHROUGH;
-    server->grabbed_toplevel = NULL;
-}
-
-static void process_cursor_move(struct butter_server *server) {
-    /* Move the grabbed toplevel to the new position. */
-    struct butter_toplevel *toplevel = server->grabbed_toplevel;
-    wlr_scene_node_set_position(&toplevel->scene_tree->node,
-        server->cursor->x - server->grab_x,
-        server->cursor->y - server->grab_y);
-}
-
-static void process_cursor_resize(struct butter_server *server) {
-    /*
-     * Resizing the grabbed toplevel can be a little bit complicated, because we
-     * could be resizing from any corner or edge. This not only resizes the
-     * toplevel on one or two axes, but can also move the toplevel if you resize
-     * from the top or left edges (or top-left corner).
-     *
-     * Note that some shortcuts are taken here. In a more fleshed-out
-     * compositor, you'd wait for the client to prepare a buffer at the new
-     * size, then commit any movement that was prepared.
-     */
-    struct butter_toplevel *toplevel = server->grabbed_toplevel;
-    double border_x = server->cursor->x - server->grab_x;
-    double border_y = server->cursor->y - server->grab_y;
-    int new_left = server->grab_geobox.x;
-    int new_right = server->grab_geobox.x + server->grab_geobox.width;
-    int new_top = server->grab_geobox.y;
-    int new_bottom = server->grab_geobox.y + server->grab_geobox.height;
-
-    if (server->resize_edges & WLR_EDGE_TOP) {
-        new_top = border_y;
-        if (new_top >= new_bottom) {
-            new_top = new_bottom - 1;
-        }
-    } else if (server->resize_edges & WLR_EDGE_BOTTOM) {
-        new_bottom = border_y;
-        if (new_bottom <= new_top) {
-            new_bottom = new_top + 1;
-        }
-    }
-    if (server->resize_edges & WLR_EDGE_LEFT) {
-        new_left = border_x;
-        if (new_left >= new_right) {
-            new_left = new_right - 1;
-        }
-    } else if (server->resize_edges & WLR_EDGE_RIGHT) {
-        new_right = border_x;
-        if (new_right <= new_left) {
-            new_right = new_left + 1;
-        }
-    }
-
-    struct wlr_box *geo_box = &toplevel->xdg_toplevel->base->geometry;
-    wlr_scene_node_set_position(&toplevel->scene_tree->node,
-        new_left - geo_box->x, new_top - geo_box->y);
-
-    int new_width = new_right - new_left;
-    int new_height = new_bottom - new_top;
-    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, new_width, new_height);
-}
-
 static void process_cursor_motion(struct butter_server *server, uint32_t time) {
-    /* If the mode is non-passthrough, delegate to those functions. */
-    if (server->cursor_mode == BUTTER_CURSOR_MOVE) {
-        process_cursor_move(server);
-        return;
-    } else if (server->cursor_mode == BUTTER_CURSOR_RESIZE) {
-        process_cursor_resize(server);
-        return;
-    }
-
-    /* Otherwise, find the toplevel under the pointer and send the event along. */
+    /* find the toplevel under the pointer and send the event along. */
     double sx, sy;
     struct wlr_seat *seat = server->seat;
     struct wlr_surface *surface = NULL;
@@ -539,17 +461,12 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
     /* Notify the client with pointer focus that a button press has occurred */
     wlr_seat_pointer_notify_button(server->seat,
             event->time_msec, event->button, event->state);
-    if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
-        /* If you released any buttons, we exit interactive move/resize mode. */
-        reset_cursor_mode(server);
-    } else {
-        /* Focus that client if the button was _pressed_ */
-        double sx, sy;
-        struct wlr_surface *surface = NULL;
-        struct butter_toplevel *toplevel = desktop_toplevel_at(server,
-                server->cursor->x, server->cursor->y, &surface, &sx, &sy);
-        focus_toplevel(toplevel);
-    }
+    /* Focus that client if both, the button was _pressed_ or _released_*/
+    double sx, sy;
+    struct wlr_surface *surface = NULL;
+    struct butter_toplevel *toplevel = desktop_toplevel_at(server,
+            server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+    focus_toplevel(toplevel);
 }
 
 static void server_cursor_axis(struct wl_listener *listener, void *data) {
@@ -688,11 +605,6 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
     /* Called when the surface is unmapped, and should no longer be shown. */
     struct butter_toplevel *toplevel = wl_container_of(listener, toplevel, unmap);
 
-    /* Reset the cursor mode if the grabbed toplevel was unmapped. */
-    if (toplevel == toplevel->server->grabbed_toplevel) {
-        reset_cursor_mode(toplevel->server);
-    }
-
     wl_list_remove(&toplevel->link);
 }
 
@@ -725,37 +637,6 @@ static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
     free(toplevel);
 }
 
-static void begin_interactive(struct butter_toplevel *toplevel,
-        enum butter_cursor_mode mode, uint32_t edges) {
-    /* This function sets up an interactive move or resize operation, where the
-     * compositor stops propagating pointer events to clients and instead
-     * consumes them itself, to move or resize windows. */
-    struct butter_server *server = toplevel->server;
-
-    server->grabbed_toplevel = toplevel;
-    server->cursor_mode = mode;
-
-    if (mode == BUTTER_CURSOR_MOVE) {
-        server->grab_x = server->cursor->x - toplevel->scene_tree->node.x;
-        server->grab_y = server->cursor->y - toplevel->scene_tree->node.y;
-    } else {
-        struct wlr_box *geo_box = &toplevel->xdg_toplevel->base->geometry;
-
-        double border_x = (toplevel->scene_tree->node.x + geo_box->x) +
-            ((edges & WLR_EDGE_RIGHT) ? geo_box->width : 0);
-        double border_y = (toplevel->scene_tree->node.y + geo_box->y) +
-            ((edges & WLR_EDGE_BOTTOM) ? geo_box->height : 0);
-        server->grab_x = server->cursor->x - border_x;
-        server->grab_y = server->cursor->y - border_y;
-
-        server->grab_geobox = *geo_box;
-        server->grab_geobox.x += toplevel->scene_tree->node.x;
-        server->grab_geobox.y += toplevel->scene_tree->node.y;
-
-        server->resize_edges = edges;
-    }
-}
-
 static void xdg_toplevel_request_move(
         struct wl_listener *listener, void *data) {
     /* This event is raised when a client would like to begin an interactive
@@ -763,8 +644,11 @@ static void xdg_toplevel_request_move(
      * decorations. Note that a more sophisticated compositor should check the
      * provided serial against a list of button press serials sent to this
      * client, to prevent the client from requesting this whenever they want. */
-    struct butter_toplevel *toplevel = wl_container_of(listener, toplevel, request_move);
-    begin_interactive(toplevel, BUTTER_CURSOR_MOVE, 0);
+    struct butter_toplevel *toplevel =
+        wl_container_of(listener, toplevel, request_move);
+    if (toplevel->xdg_toplevel->base->initialized) {
+        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    }
 }
 
 static void xdg_toplevel_request_resize(
@@ -775,8 +659,11 @@ static void xdg_toplevel_request_resize(
      * provided serial against a list of button press serials sent to this
      * client, to prevent the client from requesting this whenever they want. */
     struct wlr_xdg_toplevel_resize_event *event = data;
-    struct butter_toplevel *toplevel = wl_container_of(listener, toplevel, request_resize);
-    begin_interactive(toplevel, BUTTER_CURSOR_RESIZE, event->edges);
+    struct butter_toplevel *toplevel =
+        wl_container_of(listener, toplevel, request_resize);
+    if (toplevel->xdg_toplevel->base->initialized) {
+        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    }
 }
 
 static void xdg_toplevel_request_maximize(
