@@ -889,11 +889,14 @@ int main(int argc, char *argv[]) {
     char *startup_cmd = NULL;
 
     int c;
-    while ((c = getopt(argc, argv, "s:h")) != -1) {
+    while ((c = getopt(argc, argv, "s:hv")) != -1) {
         switch (c) {
         case 's':
             startup_cmd = optarg;
             break;
+        case 'v':
+            printf("Butter Compositor: v%s\n", VERSION);
+            return 0;
         default:
             printf("Usage: %s [-s startup command]\n", argv[0]);
             return 0;

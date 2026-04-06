@@ -7,6 +7,9 @@ CFLAGS_PKG_CONFIG!=$(PKG_CONFIG) --cflags $(PKGS)
 CFLAGS+=$(CFLAGS_PKG_CONFIG)
 LIBS!=$(PKG_CONFIG) --libs $(PKGS)
 
+VERSION:=$(shell git describe --tags --always --dirty | sed 's/^v//')
+CFLAGS+=-DVERSION=\"$(VERSION)\"
+
 all: butter
 
 # wayland-scanner is a tool which generates C headers and rigging for Wayland
