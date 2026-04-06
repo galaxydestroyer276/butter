@@ -28,4 +28,4 @@ programs within the compositor, as the compositor does not support any custom
 keybindings.\nThe compositor only supports these following keybindings:
 
 - `Alt+Escape`: Terminate the compositor
-- `Alt+F1`: Cycle between windows
+- `Alt+Tab`: Cycle between windows
