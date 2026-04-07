@@ -22,6 +22,7 @@
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
@@ -65,6 +66,8 @@ struct butter_server {
     struct wlr_output_layout *output_layout;
     struct wl_list outputs;
     struct wl_listener new_output;
+
+    struct wlr_xdg_decoration_manager_v1 *decoration_manager;
 };
 
 struct butter_output {
@@ -848,6 +851,8 @@ int main(int argc, char *argv[]) {
     wlr_subcompositor_create(server.wl_display);
     wlr_data_device_manager_create(server.wl_display);
     wlr_primary_selection_v1_device_manager_create(server.wl_display);
+
+    server.decoration_manager = wlr_xdg_decoration_manager_v1_create(server.wl_display);
 
     /* Creates an output layout, which a wlroots utility for working with an
      * arrangement of screens in a physical layout. */
