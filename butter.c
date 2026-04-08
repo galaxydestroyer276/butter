@@ -29,6 +29,9 @@
 
 #define LISTEN(E, L, H)    wl_signal_add((E), ((L)->notify = (H), (L)))
 
+#define SEAT_NAME       "seat0"
+#define CURSOR_NAME     "default"
+
 /* For brevity's sake, struct members are annotated where they are used. */
 enum butter_cursor_mode {
     BUTTER_CURSOR_PASSTHROUGH,
@@ -346,7 +349,7 @@ static void seat_pointer_focus_change(struct wl_listener *listener, void *data) 
      * is NULL */
      struct wlr_seat_pointer_focus_change_event *event = data;
      if (event->new_surface == NULL) {
-        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
+        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, CURSOR_NAME);
      }
 }
 
@@ -400,7 +403,7 @@ static void process_cursor_motion(struct butter_server *server, uint32_t time) {
         /* If there's no toplevel under the cursor, set the cursor image to a
          * default. This is what makes the cursor image appear when you move it
          * around the screen, not over any toplevels. */
-        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
+        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, CURSOR_NAME);
     }
     if (surface) {
         /*
@@ -905,7 +908,7 @@ int main(int argc, char *argv[]) {
     wl_list_init(&server.keyboards);
     LISTEN(&server.backend->events.new_input, &server.new_input, server_new_input);
 
-    server.seat = wlr_seat_create(server.wl_display, "seat0");
+    server.seat = wlr_seat_create(server.wl_display, SEAT_NAME);
     LISTEN(&server.seat->events.request_set_cursor, &server.request_cursor, seat_request_cursor);
     LISTEN(&server.seat->pointer_state.events.focus_change, &server.pointer_focus_change, seat_pointer_focus_change);
     LISTEN(&server.seat->events.request_set_selection, &server.request_set_selection, seat_request_set_selection);
