@@ -27,6 +27,8 @@
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
+#define LISTEN(E, L, H)    wl_signal_add((E), ((L)->notify = (H), (L)))
+
 /* For brevity's sake, struct members are annotated where they are used. */
 enum butter_cursor_mode {
     BUTTER_CURSOR_PASSTHROUGH,
@@ -272,12 +274,9 @@ static void server_new_keyboard(struct butter_server *server,
     wlr_keyboard_set_repeat_info(wlr_keyboard, 25, 600);
 
     /* Here we set up listeners for keyboard events. */
-    keyboard->modifiers.notify = keyboard_handle_modifiers;
-    wl_signal_add(&wlr_keyboard->events.modifiers, &keyboard->modifiers);
-    keyboard->key.notify = keyboard_handle_key;
-    wl_signal_add(&wlr_keyboard->events.key, &keyboard->key);
-    keyboard->destroy.notify = keyboard_handle_destroy;
-    wl_signal_add(&device->events.destroy, &keyboard->destroy);
+    LISTEN(&wlr_keyboard->events.modifiers, &keyboard->modifiers, keyboard_handle_modifiers);
+    LISTEN(&wlr_keyboard->events.key, &keyboard->key, keyboard_handle_key);
+    LISTEN(&device->events.destroy, &keyboard->destroy, keyboard_handle_destroy);
 
     wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
 
@@ -568,16 +567,13 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     output->server = server;
 
     /* Sets up a listener for the frame event. */
-    output->frame.notify = output_frame;
-    wl_signal_add(&wlr_output->events.frame, &output->frame);
+    LISTEN(&wlr_output->events.frame, &output->frame, output_frame);
 
     /* Sets up a listener for the state request event. */
-    output->request_state.notify = output_request_state;
-    wl_signal_add(&wlr_output->events.request_state, &output->request_state);
+    LISTEN(&wlr_output->events.request_state, &output->request_state, output_request_state);
 
     /* Sets up a listener for the destroy event. */
-    output->destroy.notify = output_destroy;
-    wl_signal_add(&wlr_output->events.destroy, &output->destroy);
+    LISTEN(&wlr_output->events.destroy, &output->destroy, output_destroy);
 
     wl_list_insert(&server->outputs, &output->link);
 
@@ -711,25 +707,17 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
     xdg_toplevel->base->data = toplevel->scene_tree;
 
     /* Listen to the various events it can emit */
-    toplevel->map.notify = xdg_toplevel_map;
-    wl_signal_add(&xdg_toplevel->base->surface->events.map, &toplevel->map);
-    toplevel->unmap.notify = xdg_toplevel_unmap;
-    wl_signal_add(&xdg_toplevel->base->surface->events.unmap, &toplevel->unmap);
-    toplevel->commit.notify = xdg_toplevel_commit;
-    wl_signal_add(&xdg_toplevel->base->surface->events.commit, &toplevel->commit);
+    LISTEN(&xdg_toplevel->base->surface->events.map, &toplevel->map, xdg_toplevel_map);
+    LISTEN(&xdg_toplevel->base->surface->events.unmap, &toplevel->unmap, xdg_toplevel_unmap);
+    LISTEN(&xdg_toplevel->base->surface->events.commit, &toplevel->commit, xdg_toplevel_commit);
 
-    toplevel->destroy.notify = xdg_toplevel_destroy;
-    wl_signal_add(&xdg_toplevel->events.destroy, &toplevel->destroy);
+    LISTEN(&xdg_toplevel->events.destroy, &toplevel->destroy, xdg_toplevel_destroy);
 
     /* cotd */
-    toplevel->request_move.notify = xdg_toplevel_request_move;
-    wl_signal_add(&xdg_toplevel->events.request_move, &toplevel->request_move);
-    toplevel->request_resize.notify = xdg_toplevel_request_resize;
-    wl_signal_add(&xdg_toplevel->events.request_resize, &toplevel->request_resize);
-    toplevel->request_maximize.notify = xdg_toplevel_request_maximize;
-    wl_signal_add(&xdg_toplevel->events.request_maximize, &toplevel->request_maximize);
-    toplevel->request_fullscreen.notify = xdg_toplevel_request_fullscreen;
-    wl_signal_add(&xdg_toplevel->events.request_fullscreen, &toplevel->request_fullscreen);
+    LISTEN(&xdg_toplevel->events.request_move, &toplevel->request_move, xdg_toplevel_request_move);
+    LISTEN(&xdg_toplevel->events.request_resize, &toplevel->request_resize, xdg_toplevel_request_resize);
+    LISTEN(&xdg_toplevel->events.request_maximize, &toplevel->request_maximize, xdg_toplevel_request_maximize);
+    LISTEN(&xdg_toplevel->events.request_fullscreen, &toplevel->request_fullscreen, xdg_toplevel_request_fullscreen);
 }
 
 static void xdg_popup_commit(struct wl_listener *listener, void *data) {
@@ -773,11 +761,8 @@ static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
     struct wlr_scene_tree *parent_tree = parent->data;
     xdg_popup->base->data = wlr_scene_xdg_surface_create(parent_tree, xdg_popup->base);
 
-    popup->commit.notify = xdg_popup_commit;
-    wl_signal_add(&xdg_popup->base->surface->events.commit, &popup->commit);
-
-    popup->destroy.notify = xdg_popup_destroy;
-    wl_signal_add(&xdg_popup->events.destroy, &popup->destroy);
+    LISTEN(&xdg_popup->base->surface->events.commit, &popup->commit, xdg_popup_commit);
+    LISTEN(&xdg_popup->events.destroy, &popup->destroy, xdg_popup_destroy);
 }
 
 int main(int argc, char *argv[]) {
@@ -861,8 +846,7 @@ int main(int argc, char *argv[]) {
     /* Configure a listener to be notified when new outputs are available on the
      * backend. */
     wl_list_init(&server.outputs);
-    server.new_output.notify = server_new_output;
-    wl_signal_add(&server.backend->events.new_output, &server.new_output);
+    LISTEN(&server.backend->events.new_output, &server.new_output, server_new_output);
 
     /* Create a scene graph. This is a wlroots abstraction that handles all
      * rendering and damage tracking. All the compositor author needs to do
@@ -879,10 +863,8 @@ int main(int argc, char *argv[]) {
      */
     wl_list_init(&server.toplevels);
     server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
-    server.new_xdg_toplevel.notify = server_new_xdg_toplevel;
-    wl_signal_add(&server.xdg_shell->events.new_toplevel, &server.new_xdg_toplevel);
-    server.new_xdg_popup.notify = server_new_xdg_popup;
-    wl_signal_add(&server.xdg_shell->events.new_popup, &server.new_xdg_popup);
+    LISTEN(&server.xdg_shell->events.new_toplevel, &server.new_xdg_toplevel, server_new_xdg_toplevel);
+    LISTEN(&server.xdg_shell->events.new_popup, &server.new_xdg_popup, server_new_xdg_popup);
 
     /*
      * Creates a cursor, which is a wlroots utility for tracking the cursor
@@ -908,17 +890,11 @@ int main(int argc, char *argv[]) {
      * And more comments are sprinkled throughout the notify functions above.
      */
     server.cursor_mode = BUTTER_CURSOR_PASSTHROUGH;
-    server.cursor_motion.notify = server_cursor_motion;
-    wl_signal_add(&server.cursor->events.motion, &server.cursor_motion);
-    server.cursor_motion_absolute.notify = server_cursor_motion_absolute;
-    wl_signal_add(&server.cursor->events.motion_absolute,
-            &server.cursor_motion_absolute);
-    server.cursor_button.notify = server_cursor_button;
-    wl_signal_add(&server.cursor->events.button, &server.cursor_button);
-    server.cursor_axis.notify = server_cursor_axis;
-    wl_signal_add(&server.cursor->events.axis, &server.cursor_axis);
-    server.cursor_frame.notify = server_cursor_frame;
-    wl_signal_add(&server.cursor->events.frame, &server.cursor_frame);
+    LISTEN(&server.cursor->events.motion, &server.cursor_motion, server_cursor_motion);
+    LISTEN(&server.cursor->events.motion_absolute, &server.cursor_motion_absolute, server_cursor_motion_absolute);
+    LISTEN(&server.cursor->events.button, &server.cursor_button, server_cursor_button);
+    LISTEN(&server.cursor->events.axis, &server.cursor_axis, server_cursor_axis);
+    LISTEN(&server.cursor->events.frame, &server.cursor_frame, server_cursor_frame);
 
     /*
      * Configures a seat, which is a single "seat" at which a user sits and
@@ -927,18 +903,12 @@ int main(int argc, char *argv[]) {
      * let us know when new input devices are available on the backend.
      */
     wl_list_init(&server.keyboards);
-    server.new_input.notify = server_new_input;
-    wl_signal_add(&server.backend->events.new_input, &server.new_input);
+    LISTEN(&server.backend->events.new_input, &server.new_input, server_new_input);
+
     server.seat = wlr_seat_create(server.wl_display, "seat0");
-    server.request_cursor.notify = seat_request_cursor;
-    wl_signal_add(&server.seat->events.request_set_cursor,
-            &server.request_cursor);
-    server.pointer_focus_change.notify = seat_pointer_focus_change;
-    wl_signal_add(&server.seat->pointer_state.events.focus_change,
-            &server.pointer_focus_change);
-    server.request_set_selection.notify = seat_request_set_selection;
-    wl_signal_add(&server.seat->events.request_set_selection,
-            &server.request_set_selection);
+    LISTEN(&server.seat->events.request_set_cursor, &server.request_cursor, seat_request_cursor);
+    LISTEN(&server.seat->pointer_state.events.focus_change, &server.pointer_focus_change, seat_pointer_focus_change);
+    LISTEN(&server.seat->events.request_set_selection, &server.request_set_selection, seat_request_set_selection);
 
     /* Add a Unix socket to the Wayland display. */
     const char *socket = wl_display_add_socket_auto(server.wl_display);
