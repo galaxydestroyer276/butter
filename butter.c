@@ -50,7 +50,7 @@ struct butter_server {
     struct wlr_xdg_shell *xdg_shell;
     struct wl_listener new_xdg_toplevel;
     struct wl_listener new_xdg_popup;
-    struct wl_list toplevels;
+    struct wl_list clients;
 
     struct wlr_cursor *cursor;
     struct wlr_xcursor_manager *cursor_mgr;
@@ -84,7 +84,7 @@ struct butter_output {
     struct wl_listener destroy;
 };
 
-struct butter_toplevel {
+struct butter_client {
     struct wl_list link;
     struct butter_server *server;
     struct wlr_xdg_toplevel *xdg_toplevel;
@@ -115,15 +115,15 @@ struct butter_keyboard {
     struct wl_listener destroy;
 };
 
-static void focus_toplevel(struct butter_toplevel *toplevel) {
+static void focus_client(struct butter_client *client) {
     /* Note: this function only deals with keyboard focus. */
-    if (toplevel == NULL) {
+    if (client == NULL) {
         return;
     }
-    struct butter_server *server = toplevel->server;
+    struct butter_server *server = client->server;
     struct wlr_seat *seat = server->seat;
     struct wlr_surface *prev_surface = seat->keyboard_state.focused_surface;
-    struct wlr_surface *surface = toplevel->xdg_toplevel->base->surface;
+    struct wlr_surface *surface = client->xdg_toplevel->base->surface;
     if (prev_surface == surface) {
         /* Don't re-focus an already focused surface. */
         return;
@@ -141,12 +141,12 @@ static void focus_toplevel(struct butter_toplevel *toplevel) {
         }
     }
     struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
-    /* Move the toplevel to the front */
-    wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
-    wl_list_remove(&toplevel->link);
-    wl_list_insert(&server->toplevels, &toplevel->link);
+    /* Move the client to the front */
+    wlr_scene_node_raise_to_top(&client->scene_tree->node);
+    wl_list_remove(&client->link);
+    wl_list_insert(&server->clients, &client->link);
     /* Activate the new surface */
-    wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
+    wlr_xdg_toplevel_set_activated(client->xdg_toplevel, true);
     /*
      * Tell the seat to have the keyboard enter this surface. wlroots will keep
      * track of this and automatically send key events to the appropriate
@@ -189,13 +189,13 @@ static bool handle_keybinding(struct butter_server *server, xkb_keysym_t sym) {
         wl_display_terminate(server->wl_display);
         break;
     case XKB_KEY_Tab:
-        /* Cycle to the next toplevel */
-        if (wl_list_length(&server->toplevels) < 2) {
+        /* Cycle to the next client */
+        if (wl_list_length(&server->clients) < 2) {
             break;
         }
-        struct butter_toplevel *next_toplevel =
-            wl_container_of(server->toplevels.prev, next_toplevel, link);
-        focus_toplevel(next_toplevel);
+        struct butter_client *next_client =
+            wl_container_of(server->clients.prev, next_client, link);
+        focus_client(next_client);
         break;
     case XKB_KEY_Return:
         if (fork() == 0) {
@@ -364,12 +364,12 @@ static void seat_request_set_selection(struct wl_listener *listener, void *data)
     wlr_seat_set_selection(server->seat, event->source, event->serial);
 }
 
-static struct butter_toplevel *desktop_toplevel_at(
+static struct butter_client *desktop_client_at(
         struct butter_server *server, double lx, double ly,
         struct wlr_surface **surface, double *sx, double *sy) {
     /* This returns the topmost node in the scene at the given layout coords.
      * We only care about surface nodes as we are specifically looking for a
-     * surface in the surface tree of a butter_toplevel. */
+     * surface in the surface tree of a butter_client. */
     struct wlr_scene_node *node = wlr_scene_node_at(
         &server->scene->tree.node, lx, ly, sx, sy);
     if (node == NULL || node->type != WLR_SCENE_NODE_BUFFER) {
@@ -383,7 +383,7 @@ static struct butter_toplevel *desktop_toplevel_at(
     }
 
     *surface = scene_surface->surface;
-    /* Find the node corresponding to the butter_toplevel at the root of this
+    /* Find the node corresponding to the butter_client at the root of this
      * surface tree, it is the only one for which we set the data field. */
     struct wlr_scene_tree *tree = node->parent;
     while (tree != NULL && tree->node.data == NULL) {
@@ -393,16 +393,16 @@ static struct butter_toplevel *desktop_toplevel_at(
 }
 
 static void process_cursor_motion(struct butter_server *server, uint32_t time) {
-    /* find the toplevel under the pointer and send the event along. */
+    /* find the client under the pointer and send the event along. */
     double sx, sy;
     struct wlr_seat *seat = server->seat;
     struct wlr_surface *surface = NULL;
-    struct butter_toplevel *toplevel = desktop_toplevel_at(server,
+    struct butter_client *client = desktop_client_at(server,
             server->cursor->x, server->cursor->y, &surface, &sx, &sy);
-    if (!toplevel) {
-        /* If there's no toplevel under the cursor, set the cursor image to a
+    if (!client) {
+        /* If there's no client under the cursor, set the cursor image to a
          * default. This is what makes the cursor image appear when you move it
-         * around the screen, not over any toplevels. */
+         * around the screen, not over any clients. */
         wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, CURSOR_NAME);
     }
     if (surface) {
@@ -470,9 +470,9 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
     /* Focus that client if both, the button was _pressed_ or _released_*/
     double sx, sy;
     struct wlr_surface *surface = NULL;
-    struct butter_toplevel *toplevel = desktop_toplevel_at(server,
+    struct butter_client *client = desktop_client_at(server,
             server->cursor->x, server->cursor->y, &surface, &sx, &sy);
-    focus_toplevel(toplevel);
+    focus_client(client);
 }
 
 static void server_cursor_axis(struct wl_listener *listener, void *data) {
@@ -595,66 +595,66 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
 }
 
-static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
+static void butter_client_map(struct wl_listener *listener, void *data) {
     /* Called when the surface is mapped, or ready to display on-screen. */
-    struct butter_toplevel *toplevel = wl_container_of(listener, toplevel, map);
+    struct butter_client *client = wl_container_of(listener, client, map);
 
-    wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
+    wl_list_insert(&client->server->clients, &client->link);
 
-    focus_toplevel(toplevel);
+    focus_client(client);
 }
 
-static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
+static void butter_client_unmap(struct wl_listener *listener, void *data) {
     /* Called when the surface is unmapped, and should no longer be shown. */
-    struct butter_toplevel *toplevel = wl_container_of(listener, toplevel, unmap);
+    struct butter_client *client = wl_container_of(listener, client, unmap);
 
-    wl_list_remove(&toplevel->link);
+    wl_list_remove(&client->link);
 }
 
-static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
+static void butter_client_commit(struct wl_listener *listener, void *data) {
     /* Called when a new surface state is committed. */
-    struct butter_toplevel *toplevel = wl_container_of(listener, toplevel, commit);
+    struct butter_client *client = wl_container_of(listener, client, commit);
 
-    if (toplevel->xdg_toplevel->base->initial_commit) {
+    if (client->xdg_toplevel->base->initial_commit) {
         /* When an xdg_surface performs an initial commit, the compositor must
          * reply with a configure so the client can map the surface. butter
          * configures the xdg_toplevel with 0,0 size to let the client pick the
          * dimensions itself. */
-        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+        wlr_xdg_toplevel_set_size(client->xdg_toplevel, 0, 0);
     }
 }
 
-static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
+static void butter_client_destroy(struct wl_listener *listener, void *data) {
     /* Called when the xdg_toplevel is destroyed. */
-    struct butter_toplevel *toplevel = wl_container_of(listener, toplevel, destroy);
+    struct butter_client *client = wl_container_of(listener, client, destroy);
 
-    wl_list_remove(&toplevel->map.link);
-    wl_list_remove(&toplevel->unmap.link);
-    wl_list_remove(&toplevel->commit.link);
-    wl_list_remove(&toplevel->destroy.link);
-    wl_list_remove(&toplevel->request_move.link);
-    wl_list_remove(&toplevel->request_resize.link);
-    wl_list_remove(&toplevel->request_maximize.link);
-    wl_list_remove(&toplevel->request_fullscreen.link);
+    wl_list_remove(&client->map.link);
+    wl_list_remove(&client->unmap.link);
+    wl_list_remove(&client->commit.link);
+    wl_list_remove(&client->destroy.link);
+    wl_list_remove(&client->request_move.link);
+    wl_list_remove(&client->request_resize.link);
+    wl_list_remove(&client->request_maximize.link);
+    wl_list_remove(&client->request_fullscreen.link);
 
-    free(toplevel);
+    free(client);
 }
 
-static void xdg_toplevel_request_move(
+static void butter_client_request_move(
         struct wl_listener *listener, void *data) {
     /* This event is raised when a client would like to begin an interactive
      * move, typically because the user clicked on their client-side
      * decorations. Note that a more sophisticated compositor should check the
      * provided serial against a list of button press serials sent to this
      * client, to prevent the client from requesting this whenever they want. */
-    struct butter_toplevel *toplevel =
-        wl_container_of(listener, toplevel, request_move);
-    if (toplevel->xdg_toplevel->base->initialized) {
-        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    struct butter_client *client =
+        wl_container_of(listener, client, request_move);
+    if (client->xdg_toplevel->base->initialized) {
+        wlr_xdg_surface_schedule_configure(client->xdg_toplevel->base);
     }
 }
 
-static void xdg_toplevel_request_resize(
+static void butter_client_request_resize(
         struct wl_listener *listener, void *data) {
     /* This event is raised when a client would like to begin an interactive
      * resize, typically because the user clicked on their client-side
@@ -662,14 +662,14 @@ static void xdg_toplevel_request_resize(
      * provided serial against a list of button press serials sent to this
      * client, to prevent the client from requesting this whenever they want. */
     struct wlr_xdg_toplevel_resize_event *event = data;
-    struct butter_toplevel *toplevel =
-        wl_container_of(listener, toplevel, request_resize);
-    if (toplevel->xdg_toplevel->base->initialized) {
-        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    struct butter_client *client =
+        wl_container_of(listener, client, request_resize);
+    if (client->xdg_toplevel->base->initialized) {
+        wlr_xdg_surface_schedule_configure(client->xdg_toplevel->base);
     }
 }
 
-static void xdg_toplevel_request_maximize(
+static void butter_client_request_maximize(
         struct wl_listener *listener, void *data) {
     /* This event is raised when a client would like to maximize itself,
      * typically because the user clicked on the maximize button on client-side
@@ -678,49 +678,49 @@ static void xdg_toplevel_request_maximize(
      * wlr_xdg_surface_schedule_configure() is used to send an empty reply.
      * However, if the request was sent before an initial commit, we don't do
      * anything and let the client finish the initial surface setup. */
-    struct butter_toplevel *toplevel =
-        wl_container_of(listener, toplevel, request_maximize);
-    if (toplevel->xdg_toplevel->base->initialized) {
-        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    struct butter_client *client =
+        wl_container_of(listener, client, request_maximize);
+    if (client->xdg_toplevel->base->initialized) {
+        wlr_xdg_surface_schedule_configure(client->xdg_toplevel->base);
     }
 }
 
-static void xdg_toplevel_request_fullscreen(
+static void butter_client_request_fullscreen(
         struct wl_listener *listener, void *data) {
     /* Just as with request_maximize, we must send a configure here. */
-    struct butter_toplevel *toplevel =
-        wl_container_of(listener, toplevel, request_fullscreen);
-    if (toplevel->xdg_toplevel->base->initialized) {
-        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    struct butter_client *client =
+        wl_container_of(listener, client, request_fullscreen);
+    if (client->xdg_toplevel->base->initialized) {
+        wlr_xdg_surface_schedule_configure(client->xdg_toplevel->base);
     }
 }
 
-static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
-    /* This event is raised when a client creates a new toplevel (application window). */
+static void server_new_butter_client(struct wl_listener *listener, void *data) {
+    /* This event is raised when a client creates a new client (application window). */
     struct butter_server *server = wl_container_of(listener, server, new_xdg_toplevel);
     struct wlr_xdg_toplevel *xdg_toplevel = data;
 
-    /* Allocate a butter_toplevel for this surface */
-    struct butter_toplevel *toplevel = calloc(1, sizeof(*toplevel));
-    toplevel->server = server;
-    toplevel->xdg_toplevel = xdg_toplevel;
-    toplevel->scene_tree =
-        wlr_scene_xdg_surface_create(&toplevel->server->scene->tree, xdg_toplevel->base);
-    toplevel->scene_tree->node.data = toplevel;
-    xdg_toplevel->base->data = toplevel->scene_tree;
+    /* Allocate a butter_client for this surface */
+    struct butter_client *client = calloc(1, sizeof(*client));
+    client->server = server;
+    client->xdg_toplevel = xdg_toplevel;
+    client->scene_tree =
+        wlr_scene_xdg_surface_create(&client->server->scene->tree, xdg_toplevel->base);
+    client->scene_tree->node.data = client;
+    xdg_toplevel->base->data = client->scene_tree;
 
     /* Listen to the various events it can emit */
-    LISTEN(&xdg_toplevel->base->surface->events.map, &toplevel->map, xdg_toplevel_map);
-    LISTEN(&xdg_toplevel->base->surface->events.unmap, &toplevel->unmap, xdg_toplevel_unmap);
-    LISTEN(&xdg_toplevel->base->surface->events.commit, &toplevel->commit, xdg_toplevel_commit);
+    LISTEN(&xdg_toplevel->base->surface->events.map, &client->map, butter_client_map);
+    LISTEN(&xdg_toplevel->base->surface->events.unmap, &client->unmap, butter_client_unmap);
+    LISTEN(&xdg_toplevel->base->surface->events.commit, &client->commit, butter_client_commit);
 
-    LISTEN(&xdg_toplevel->events.destroy, &toplevel->destroy, xdg_toplevel_destroy);
+    LISTEN(&xdg_toplevel->events.destroy, &client->destroy, butter_client_destroy);
 
     /* cotd */
-    LISTEN(&xdg_toplevel->events.request_move, &toplevel->request_move, xdg_toplevel_request_move);
-    LISTEN(&xdg_toplevel->events.request_resize, &toplevel->request_resize, xdg_toplevel_request_resize);
-    LISTEN(&xdg_toplevel->events.request_maximize, &toplevel->request_maximize, xdg_toplevel_request_maximize);
-    LISTEN(&xdg_toplevel->events.request_fullscreen, &toplevel->request_fullscreen, xdg_toplevel_request_fullscreen);
+    LISTEN(&xdg_toplevel->events.request_move, &client->request_move, butter_client_request_move);
+    LISTEN(&xdg_toplevel->events.request_resize, &client->request_resize, butter_client_request_resize);
+    LISTEN(&xdg_toplevel->events.request_maximize, &client->request_maximize, butter_client_request_maximize);
+    LISTEN(&xdg_toplevel->events.request_fullscreen, &client->request_fullscreen, butter_client_request_fullscreen);
 }
 
 static void xdg_popup_commit(struct wl_listener *listener, void *data) {
@@ -864,9 +864,9 @@ int main(int argc, char *argv[]) {
      * used for application windows. For more detail on shells, refer to
      * https://drewdevault.com/2018/07/29/Wayland-shells.html.
      */
-    wl_list_init(&server.toplevels);
+    wl_list_init(&server.clients);
     server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
-    LISTEN(&server.xdg_shell->events.new_toplevel, &server.new_xdg_toplevel, server_new_xdg_toplevel);
+    LISTEN(&server.xdg_shell->events.new_toplevel, &server.new_xdg_toplevel, server_new_butter_client);
     LISTEN(&server.xdg_shell->events.new_popup, &server.new_xdg_popup, server_new_xdg_popup);
 
     /*
