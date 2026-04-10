@@ -89,14 +89,28 @@ struct butter_client {
     struct butter_server *server;
     struct wlr_xdg_toplevel *xdg_toplevel;
     struct wlr_scene_tree *scene_tree;
+
     struct wl_listener map;
     struct wl_listener unmap;
     struct wl_listener commit;
     struct wl_listener destroy;
-    struct wl_listener request_move;
-    struct wl_listener request_resize;
+
+    // Note: as per xdg-shell protocol, the compositor has to
+    // handle state requests by sending a configure event,
+    // even if it didn't actually change the state. Therefore,
+    // every compositor implementing xdg-shell support *must*
+    // listen to these signals and schedule a configure event
+    // immediately or at some time in the future; not doing so
+    // is a protocol violation.
+    struct wl_listener request_minimize;
     struct wl_listener request_maximize;
     struct wl_listener request_fullscreen;
+    struct wl_listener request_move;
+    struct wl_listener request_resize;
+    struct wl_listener request_show_window_menu;
+//    struct wl_listener set_parent;
+//    struct wl_listener set_title;
+//    struct wl_listener set_app_id;
 };
 
 struct butter_popup {
@@ -632,64 +646,60 @@ static void butter_client_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&client->unmap.link);
     wl_list_remove(&client->commit.link);
     wl_list_remove(&client->destroy.link);
-    wl_list_remove(&client->request_move.link);
-    wl_list_remove(&client->request_resize.link);
+
+    wl_list_remove(&client->request_minimize.link);
     wl_list_remove(&client->request_maximize.link);
     wl_list_remove(&client->request_fullscreen.link);
+    wl_list_remove(&client->request_move.link);
+    wl_list_remove(&client->request_resize.link);
+    wl_list_remove(&client->request_show_window_menu.link);
 
     free(client);
 }
 
-static void butter_client_request_move(
-        struct wl_listener *listener, void *data) {
-    /* This event is raised when a client would like to begin an interactive
-     * move, typically because the user clicked on their client-side
-     * decorations. Note that a more sophisticated compositor should check the
-     * provided serial against a list of button press serials sent to this
-     * client, to prevent the client from requesting this whenever they want. */
-    struct butter_client *client =
-        wl_container_of(listener, client, request_move);
+static void butter_client_request_minimize(struct wl_listener *listener, void *data) {
+    struct butter_client *client = wl_container_of(listener, client, request_minimize);
+    wlr_log(WLR_DEBUG, "client-`%s` requests minimize", client->xdg_toplevel->title);
     if (client->xdg_toplevel->base->initialized) {
         wlr_xdg_surface_schedule_configure(client->xdg_toplevel->base);
     }
 }
 
-static void butter_client_request_resize(
-        struct wl_listener *listener, void *data) {
-    /* This event is raised when a client would like to begin an interactive
-     * resize, typically because the user clicked on their client-side
-     * decorations. Note that a more sophisticated compositor should check the
-     * provided serial against a list of button press serials sent to this
-     * client, to prevent the client from requesting this whenever they want. */
-    struct wlr_xdg_toplevel_resize_event *event = data;
-    struct butter_client *client =
-        wl_container_of(listener, client, request_resize);
+static void butter_client_request_maximize(struct wl_listener *listener, void *data) {
+    struct butter_client *client = wl_container_of(listener, client, request_maximize);
+    wlr_log(WLR_DEBUG, "client-`%s` requests maximize", client->xdg_toplevel->title);
     if (client->xdg_toplevel->base->initialized) {
         wlr_xdg_surface_schedule_configure(client->xdg_toplevel->base);
     }
 }
 
-static void butter_client_request_maximize(
-        struct wl_listener *listener, void *data) {
-    /* This event is raised when a client would like to maximize itself,
-     * typically because the user clicked on the maximize button on client-side
-     * decorations. butter doesn't support maximization, but to conform to
-     * xdg-shell protocol we still must send a configure.
-     * wlr_xdg_surface_schedule_configure() is used to send an empty reply.
-     * However, if the request was sent before an initial commit, we don't do
-     * anything and let the client finish the initial surface setup. */
-    struct butter_client *client =
-        wl_container_of(listener, client, request_maximize);
+static void butter_client_request_fullscreen(struct wl_listener *listener, void *data) {
+    struct butter_client *client = wl_container_of(listener, client, request_fullscreen);
+    wlr_log(WLR_DEBUG, "client-`%s` requests fullscreen", client->xdg_toplevel->title);
     if (client->xdg_toplevel->base->initialized) {
         wlr_xdg_surface_schedule_configure(client->xdg_toplevel->base);
     }
 }
 
-static void butter_client_request_fullscreen(
-        struct wl_listener *listener, void *data) {
-    /* Just as with request_maximize, we must send a configure here. */
-    struct butter_client *client =
-        wl_container_of(listener, client, request_fullscreen);
+static void butter_client_request_move(struct wl_listener *listener, void *data) {
+    struct butter_client *client = wl_container_of(listener, client, request_move);
+    wlr_log(WLR_DEBUG, "client-`%s` requests move", client->xdg_toplevel->title);
+    if (client->xdg_toplevel->base->initialized) {
+        wlr_xdg_surface_schedule_configure(client->xdg_toplevel->base);
+    }
+}
+
+static void butter_client_request_resize(struct wl_listener *listener, void *data) {
+    struct butter_client *client = wl_container_of(listener, client, request_resize);
+    wlr_log(WLR_DEBUG, "client-`%s` requests resize", client->xdg_toplevel->title);
+    if (client->xdg_toplevel->base->initialized) {
+        wlr_xdg_surface_schedule_configure(client->xdg_toplevel->base);
+    }
+}
+
+static void butter_client_request_show_window_menu(struct wl_listener *listener, void *data) {
+    struct butter_client *client = wl_container_of(listener, client, request_show_window_menu);
+    wlr_log(WLR_DEBUG, "client-`%s` requests to show window menu", client->xdg_toplevel->title);
     if (client->xdg_toplevel->base->initialized) {
         wlr_xdg_surface_schedule_configure(client->xdg_toplevel->base);
     }
@@ -717,10 +727,12 @@ static void server_new_butter_client(struct wl_listener *listener, void *data) {
     LISTEN(&xdg_toplevel->events.destroy, &client->destroy, butter_client_destroy);
 
     /* cotd */
-    LISTEN(&xdg_toplevel->events.request_move, &client->request_move, butter_client_request_move);
-    LISTEN(&xdg_toplevel->events.request_resize, &client->request_resize, butter_client_request_resize);
+    LISTEN(&xdg_toplevel->events.request_minimize, &client->request_minimize, butter_client_request_minimize);
     LISTEN(&xdg_toplevel->events.request_maximize, &client->request_maximize, butter_client_request_maximize);
     LISTEN(&xdg_toplevel->events.request_fullscreen, &client->request_fullscreen, butter_client_request_fullscreen);
+    LISTEN(&xdg_toplevel->events.request_move, &client->request_move, butter_client_request_move);
+    LISTEN(&xdg_toplevel->events.request_resize, &client->request_resize, butter_client_request_resize);
+    LISTEN(&xdg_toplevel->events.request_show_window_menu, &client->request_show_window_menu, butter_client_request_show_window_menu);
 }
 
 static void xdg_popup_commit(struct wl_listener *listener, void *data) {
